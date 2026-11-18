@@ -278,7 +278,9 @@ DefinitionBlock ("", "DSDT", 2, "TECLST", "T70PRO  ", 1)
                                 If (LNotEqual (And (MPST, 0x600), 0x600))
                                 {
                                     If (LOr (And (MPST, One), LEqual (MPST, 0x100)))
-                                    { Return (One) }
+                                    {
+                                        If (LEqual (MRAD, One)) { Return (One) }
+                                    }
                                 }
                             }
                         }
@@ -295,6 +297,8 @@ DefinitionBlock ("", "DSDT", 2, "TECLST", "T70PRO  ", 1)
             {
                 Memory32Fixed (ReadWrite, 0x11200000, 0x10000)
                 Memory32Fixed (ReadOnly, 0x43F7F100, 0x40)
+                // T70 USB2 PHY, used to verify the live host data path.
+                Memory32Fixed (ReadOnly, 0x11F40000, 0x10000)
                 Interrupt (ResourceConsumer, Level, ActiveHigh, Exclusive) { 160 }
             })
         }
