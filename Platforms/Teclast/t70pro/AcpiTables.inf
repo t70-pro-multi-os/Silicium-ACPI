@@ -11,6 +11,7 @@
   MT6789/FADT.aslc
   MT6789/PPTT.aslc
   DSDT.asl
+  Audio.asl
 
 [Packages]
   ArmPkg/ArmPkg.dec
