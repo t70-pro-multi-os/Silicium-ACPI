@@ -1,0 +1,53 @@
+// SPDX-License-Identifier: BSD-2-Clause-Patent
+// CPU affinities and interrupt resources: T70Pro stock MT6789 device tree.
+#include <Library/PcdLib.h>
+#include <IndustryStandard/Acpi.h>
+
+#pragma pack(1)
+typedef struct {
+  EFI_ACPI_6_6_MULTIPLE_APIC_DESCRIPTION_TABLE_HEADER Header;
+  EFI_ACPI_6_6_GIC_STRUCTURE Cpu[8];
+  EFI_ACPI_6_6_GIC_DISTRIBUTOR_STRUCTURE Distributor;
+  EFI_ACPI_6_6_GICR_STRUCTURE Redistributors;
+} MT6789_MADT;
+#pragma pack()
+
+#define CPU(Uid, Affinity) { \
+  .Type = EFI_ACPI_6_6_GIC, \
+  .Length = sizeof (EFI_ACPI_6_6_GIC_STRUCTURE), \
+  .CPUInterfaceNumber = 0, .AcpiProcessorUid = Uid, \
+  .Flags = EFI_ACPI_6_6_GIC_ENABLED, \
+  .PerformanceInterruptGsiv = 23, .VGICMaintenanceInterrupt = 25, \
+  .MPIDR = Affinity \
+}
+
+MT6789_MADT MadtTable = {
+  .Header.Header = {
+    .Signature = EFI_ACPI_6_6_MULTIPLE_APIC_DESCRIPTION_TABLE_SIGNATURE,
+    .Length = sizeof (MT6789_MADT),
+    .Revision = EFI_ACPI_6_6_MULTIPLE_APIC_DESCRIPTION_TABLE_REVISION,
+    .OemId = {'M','T','K',' ',' ',' '},
+    .OemTableId = FixedPcdGet64 (PcdAcpiDefaultOemTableId),
+    .OemRevision = FixedPcdGet32 (PcdAcpiDefaultOemRevision),
+    .CreatorId = FixedPcdGet32 (PcdAcpiDefaultCreatorId),
+    .CreatorRevision = FixedPcdGet32 (PcdAcpiDefaultCreatorRevision)
+  },
+  .Cpu = {
+    CPU (0, 0x000), CPU (1, 0x100), CPU (2, 0x200), CPU (3, 0x300),
+    CPU (4, 0x400), CPU (5, 0x500), CPU (6, 0x600), CPU (7, 0x700)
+  },
+  .Distributor = {
+    .Type = EFI_ACPI_6_6_GICD,
+    .Length = sizeof (EFI_ACPI_6_6_GIC_DISTRIBUTOR_STRUCTURE),
+    .PhysicalBaseAddress = FixedPcdGet64 (PcdGicDistributorBase),
+    .GicVersion = EFI_ACPI_6_6_GIC_V3
+  },
+  // The discovery range lets the OS match GICR_TYPER affinity to each CPU.
+  .Redistributors = {
+    .Type = EFI_ACPI_6_6_GICR,
+    .Length = sizeof (EFI_ACPI_6_6_GICR_STRUCTURE),
+    .DiscoveryRangeBaseAddress = FixedPcdGet64 (PcdGicRedistributorsBase),
+    .DiscoveryRangeLength = 0x00200000
+  }
+};
+VOID *ReferenceAcpiTable = &MadtTable;

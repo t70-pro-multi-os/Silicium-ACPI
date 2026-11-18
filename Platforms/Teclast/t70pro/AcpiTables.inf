@@ -1,0 +1,30 @@
+[Defines]
+  INF_VERSION = 0x00010005
+  BASE_NAME = T70ProAcpiTables
+  FILE_GUID = DC48E1AB-ED92-4CB3-A12F-8149619187EF
+  MODULE_TYPE = USER_DEFINED
+  VERSION_STRING = 0.1
+
+[Sources]
+  MT6789/MADT.aslc
+  MT6789/GTDT.aslc
+  MT6789/FADT.aslc
+  MT6789/PPTT.aslc
+  DSDT.asl
+
+[Packages]
+  ArmPkg/ArmPkg.dec
+  MdePkg/MdePkg.dec
+  MdeModulePkg/MdeModulePkg.dec
+
+[FixedPcd]
+  gArmTokenSpaceGuid.PcdGicDistributorBase
+  gArmTokenSpaceGuid.PcdGicRedistributorsBase
+  gArmTokenSpaceGuid.PcdArmArchTimerSecIntrNum
+  gArmTokenSpaceGuid.PcdArmArchTimerIntrNum
+  gArmTokenSpaceGuid.PcdArmArchTimerVirtIntrNum
+  gArmTokenSpaceGuid.PcdArmArchTimerHypIntrNum
+  gEfiMdeModulePkgTokenSpaceGuid.PcdAcpiDefaultOemTableId
+  gEfiMdeModulePkgTokenSpaceGuid.PcdAcpiDefaultOemRevision
+  gEfiMdeModulePkgTokenSpaceGuid.PcdAcpiDefaultCreatorId
+  gEfiMdeModulePkgTokenSpaceGuid.PcdAcpiDefaultCreatorRevision

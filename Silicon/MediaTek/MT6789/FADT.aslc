@@ -1,0 +1,22 @@
+// SPDX-License-Identifier: BSD-2-Clause-Patent
+#include <Library/PcdLib.h>
+#include <IndustryStandard/Acpi.h>
+
+EFI_ACPI_6_6_FIXED_ACPI_DESCRIPTION_TABLE FadtTable = {
+  .Header = {
+    .Signature = EFI_ACPI_6_6_FIXED_ACPI_DESCRIPTION_TABLE_SIGNATURE,
+    .Length = sizeof (EFI_ACPI_6_6_FIXED_ACPI_DESCRIPTION_TABLE),
+    .Revision = EFI_ACPI_6_6_FIXED_ACPI_DESCRIPTION_TABLE_REVISION,
+    .OemId = {'M','T','K',' ',' ',' '},
+    .OemTableId = FixedPcdGet64 (PcdAcpiDefaultOemTableId),
+    .OemRevision = FixedPcdGet32 (PcdAcpiDefaultOemRevision),
+    .CreatorId = FixedPcdGet32 (PcdAcpiDefaultCreatorId),
+    .CreatorRevision = FixedPcdGet32 (PcdAcpiDefaultCreatorRevision)
+  },
+  .PreferredPmProfile = EFI_ACPI_6_6_PM_PROFILE_TABLET,
+  // No advertised S0ix or vendor reset register without hardware evidence.
+  .Flags = EFI_ACPI_6_6_HW_REDUCED_ACPI,
+  .ArmBootArch = EFI_ACPI_6_6_ARM_PSCI_COMPLIANT,
+  .MinorVersion = EFI_ACPI_6_6_FIXED_ACPI_DESCRIPTION_TABLE_MINOR_REVISION
+};
+VOID *ReferenceAcpiTable = &FadtTable;

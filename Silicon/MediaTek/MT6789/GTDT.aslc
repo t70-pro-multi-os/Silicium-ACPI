@@ -1,0 +1,24 @@
+// SPDX-License-Identifier: BSD-2-Clause-Patent
+#include <Library/PcdLib.h>
+#include <IndustryStandard/Acpi.h>
+
+EFI_ACPI_6_6_GENERIC_TIMER_DESCRIPTION_TABLE GtdtTable = {
+  .Header = {
+    .Signature = EFI_ACPI_6_6_GENERIC_TIMER_DESCRIPTION_TABLE_SIGNATURE,
+    .Length = sizeof (EFI_ACPI_6_6_GENERIC_TIMER_DESCRIPTION_TABLE),
+    .Revision = EFI_ACPI_6_6_GENERIC_TIMER_DESCRIPTION_TABLE_REVISION,
+    .OemId = {'M','T','K',' ',' ',' '},
+    .OemTableId = FixedPcdGet64 (PcdAcpiDefaultOemTableId),
+    .OemRevision = FixedPcdGet32 (PcdAcpiDefaultOemRevision),
+    .CreatorId = FixedPcdGet32 (PcdAcpiDefaultCreatorId),
+    .CreatorRevision = FixedPcdGet32 (PcdAcpiDefaultCreatorRevision)
+  },
+  .CntControlBasePhysicalAddress = MAX_UINT64,
+  .CntReadBasePhysicalAddress = MAX_UINT64,
+  // DT specifies level-high PPIs; all flags stay zero, including unproven always-on.
+  .SecurePL1TimerGSIV = FixedPcdGet32 (PcdArmArchTimerSecIntrNum),
+  .NonSecurePL1TimerGSIV = FixedPcdGet32 (PcdArmArchTimerIntrNum),
+  .VirtualTimerGSIV = FixedPcdGet32 (PcdArmArchTimerVirtIntrNum),
+  .NonSecurePL2TimerGSIV = FixedPcdGet32 (PcdArmArchTimerHypIntrNum)
+};
+VOID *ReferenceAcpiTable = &GtdtTable;

@@ -1,0 +1,47 @@
+// SPDX-License-Identifier: BSD-2-Clause-Patent
+#include <Library/PcdLib.h>
+#include <IndustryStandard/Acpi.h>
+
+#pragma pack(1)
+typedef struct {
+  EFI_ACPI_6_6_PROCESSOR_PROPERTIES_TOPOLOGY_TABLE_HEADER Header;
+  EFI_ACPI_6_6_PPTT_STRUCTURE_PROCESSOR Package;
+  EFI_ACPI_6_6_PPTT_STRUCTURE_PROCESSOR Cluster[2];
+  EFI_ACPI_6_6_PPTT_STRUCTURE_PROCESSOR Core[8];
+} MT6789_PPTT;
+#pragma pack()
+
+#define NODE_SIZE sizeof (EFI_ACPI_6_6_PPTT_STRUCTURE_PROCESSOR)
+#define CORE(Uid, ClusterId) { \
+  .Type = EFI_ACPI_6_6_PPTT_TYPE_PROCESSOR, .Length = NODE_SIZE, \
+  .Flags = {.AcpiProcessorIdValid = 1, .NodeIsALeaf = 1}, \
+  .Parent = OFFSET_OF (MT6789_PPTT, Cluster) + (ClusterId) * NODE_SIZE, \
+  .AcpiProcessorId = Uid \
+}
+
+MT6789_PPTT PpttTable = {
+  .Header.Header = {
+    .Signature = EFI_ACPI_6_6_PROCESSOR_PROPERTIES_TOPOLOGY_TABLE_STRUCTURE_SIGNATURE,
+    .Length = sizeof (MT6789_PPTT),
+    .Revision = EFI_ACPI_6_6_PROCESSOR_PROPERTIES_TOPOLOGY_TABLE_REVISION,
+    .OemId = {'M','T','K',' ',' ',' '},
+    .OemTableId = FixedPcdGet64 (PcdAcpiDefaultOemTableId),
+    .OemRevision = FixedPcdGet32 (PcdAcpiDefaultOemRevision),
+    .CreatorId = FixedPcdGet32 (PcdAcpiDefaultCreatorId),
+    .CreatorRevision = FixedPcdGet32 (PcdAcpiDefaultCreatorRevision)
+  },
+  .Package = {
+    .Type = EFI_ACPI_6_6_PPTT_TYPE_PROCESSOR, .Length = NODE_SIZE,
+    .Flags = {.PhysicalPackage = 1}
+  },
+  .Cluster = {
+    {.Type = 0, .Length = NODE_SIZE, .Parent = OFFSET_OF (MT6789_PPTT, Package)},
+    {.Type = 0, .Length = NODE_SIZE, .Parent = OFFSET_OF (MT6789_PPTT, Package)}
+  },
+  // cpu-map: six A55 cores in cluster0, two A76 cores in cluster1.
+  .Core = {
+    CORE (0, 0), CORE (1, 0), CORE (2, 0), CORE (3, 0),
+    CORE (4, 0), CORE (5, 0), CORE (6, 1), CORE (7, 1)
+  }
+};
+VOID *ReferenceAcpiTable = &PpttTable;
