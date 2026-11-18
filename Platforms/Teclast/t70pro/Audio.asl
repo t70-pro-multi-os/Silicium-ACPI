@@ -9,6 +9,9 @@ DefinitionBlock ("", "SSDT", 2, "T70PRO", "T70AUDIO", 1)
         {
             Name (_HID, "HANA6793")
             Name (_UID, Zero)
+            // Stock DT/kernel use noncoherent DMA policy; do not advertise
+            // automatic hardware cache coherency to the ARM OS.
+            Name (_CCA, Zero)
             Name (_CRS, ResourceTemplate ()
             {
                 Memory32Fixed (ReadWrite, 0x11210000, 0x00002000)
