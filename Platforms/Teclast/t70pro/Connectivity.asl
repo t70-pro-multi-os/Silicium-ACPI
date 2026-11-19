@@ -11,23 +11,18 @@ DefinitionBlock ("", "SSDT", 2, "T70PRO", "T70WCON", 1)
             Name (_HID, "HANA6796")
             Name (_UID, Zero)
             Name (_DDN, "MT6789 shared WLAN/conninfra AXI window")
-            // Enumeration only: present/enabled/visible, not functioning.
-            // No Windows driver/provider or actual enumeration is verified.
+            // Keep the device enumerable while radio transports are separate.
             Name (_STA, 0x07)
             Name (_CRS, ResourceTemplate ()
             {
                 Memory32Fixed (ReadWrite, 0x18000000, 0x00100000)
+                // CONN reset is one keyed bit in the RGU register at +0x18.
+                Memory32Fixed (ReadWrite, 0x10007018, 0x00000004)
                 // WLAN DT interrupt[0]: SPI409 + 32; flags4 level/high.
                 Interrupt (ResourceConsumer, Level, ActiveHigh, Exclusive) { 441 }
             })
-            // This is NOT all conninfra resources: external consys MMIO,
-            // consys IRQs and reserved memory are deliberately not assigned.
-            // Stock WLAN requests this full region but ignores reservation
-            // failure; consys directly maps overlapping subranges. That is
-            // not a transferable ownership/interlocking contract for Windows.
-            // A future shared provider must own this aperture exactly once
-            // and coordinate its users before any functional driver is bound.
-            // No DMA, firmware loading, radio, clock or power setup is supplied.
+            // The CONN owner obtains SPM and GPIO through the SoC and GPIO
+            // drivers. Own the WLAN aperture here once for all radio clients.
         }
     }
 }
