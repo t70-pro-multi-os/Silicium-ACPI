@@ -21,10 +21,11 @@ DefinitionBlock ("", "DSDT", 2, "TECLST", "T70PRO  ", 1)
         // I2C board providers; neither IRAD nor ICL0/6 proves runtime retention.
         OperationRegion (ITOP, SystemMemory, 0x10000000, 0x100)
         Field (ITOP, DWordAcc, NoLock, Preserve)
-        { Offset (0x10), IAXI, 32, Offset (0xB0), IMUX, 32 }
+        { Offset (0x10), IAXI, 32, Offset (0xA0), MUMX, 32,
+          Offset (0xA8), MUTC, 32, Offset (0xB0), IMUX, 32 }
         OperationRegion (IINF, SystemMemory, 0x10001090, 0x4C)
         Field (IINF, DWordAcc, NoLock, Preserve)
-        { IFG0, 32, Offset (0x48), IFG2, 32 }
+        { IFG0, 32, Offset (0x18), MUGC, 32, MUGT, 32, Offset (0x48), IFG2, 32 }
         OperationRegion (IPLL, SystemMemory, 0x1000C308, 0x48)
         Field (IPLL, DWordAcc, NoLock, Preserve)
         {
@@ -161,6 +162,12 @@ DefinitionBlock ("", "DSDT", 2, "TECLST", "T70PRO  ", 1)
         Field (HLHO, DWordAcc, NoLock, Preserve)
         { LRAD, 32, LPIN, 32, LFAR, 32, LREV, 32 }
 
+        // USBPLL CON0 and power/enable. The MT6789 clock driver places the
+        // USB output gate in PWR (bit 2); CON0 bit 0 belongs to the PCW.
+        OperationRegion (MUPL, SystemMemory, 0x1000C3C4, 0x0C)
+        Field (MUPL, DWordAcc, NoLock, Preserve)
+        { MUPC, 32, MUPD, 32, MUPW, 32 }
+
         // MUSB boot ownership, published after the firmware host has stopped.
         OperationRegion (MHHO, SystemMemory, 0x43F7F100, 0x40)
         Field (MHHO, DWordAcc, NoLock, Preserve)
@@ -249,6 +256,125 @@ DefinitionBlock ("", "DSDT", 2, "TECLST", "T70PRO  ", 1)
             Name (_CCA, Zero)
             // Custom UCX USB2 controller, rather than an xHCI-compatible device.
             Name (_CLS, Package () { 0x0C, 0x03, 0x00 })
+            // Mux selector and the exact shared parent PCW/post-divider.
+            // The one-based encoding reserves zero for an unstable sample.
+            Method (MREF, 0, NotSerialized)
+            {
+                Store (And (MUMX, 0x03000000), Local0)
+                Store (ShiftRight (Local0, 24), Local2)
+                Store (Zero, Local3)
+                If (Local2)
+                {
+                    Store (And (UPC1, 0x073FFFFF), Local4)
+                    If (LNot (IPLF (One))) { Return (Zero) }
+                    // The supported VCO range fits in 21 bits after removing
+                    // 0x80000 from the PCW. Keep all three post-divider bits.
+                    Store (Subtract (And (Local4, 0x3FFFFF), 0x80000), Local5)
+                    If (LGreater (Local5, 0x1FFFFF)) { Return (Zero) }
+                    Store (Or (Local5, ShiftRight (And (Local4, 0x07000000), 3)), Local3)
+                    If (LNotEqual (And (UPC1, 0x073FFFFF), Local4)) { Return (Zero) }
+                }
+                If (LNotEqual (And (MUMX, 0x03000000), Local0)) { Return (Zero) }
+                Return (Add (Or (ShiftLeft (Local3, 8), Local2), One))
+            }
+
+            // 24 bits of parent rate, 6 bits of USBPLL PCW and 2 bits of
+            // selector. The identity survives loss of USBPLL power.
+            Method (MCID, 0, NotSerialized)
+            {
+                Store (And (MUPC, 0x073FFFFF), Local0)
+                // USBPLL PCWs that round to the observed 2496 MHz.
+                If (LOr (LLess (Local0, 0x17FFE1), LGreaterEqual (Local0, 0x180020))) { Return (Zero) }
+                Store (MREF (), Local1)
+                If (LOr (LNot (Local1), LNotEqual (And (MUPC, 0x073FFFFF), Local0))) { Return (Zero) }
+                Return (Add (Local1, ShiftLeft (Subtract (Local0, 0x17FFE1), 2)))
+            }
+
+            Method (MCON, 0, NotSerialized)
+            {
+                // USBPLL's stock HAVE_RST_BAR flag makes CON0 bit 23
+                // part of the live-clock proof.
+                Return (LAnd (LEqual (And (MUPW, 7), 5),
+                    LAnd (And (MUPC, 0x00800000),
+                        LNot (LOr (And (MUMX, 0x80000000), And (MUGT, 2))))))
+            }
+
+            Method (MCLK, 0, Serialized)
+            {
+                If (LNot (MCON ())) { Return (Zero) }
+                Store (MCID (), Local0)
+                If (LNot (MCON ())) { Return (Zero) }
+                Return (Local0)
+            }
+
+            Method (MPCK, 2, NotSerialized)
+            {
+                Return (LAnd (LEqual (MCID (), Arg0), LEqual (And (MUPW, 7), Arg1)))
+            }
+
+            Method (MISO, 0, NotSerialized)
+            {
+                Return (LAnd (LEqual (And (MUPW, 7), 2),
+                    LAnd (And (MUMX, 0x80000000), And (MUGT, 2))))
+            }
+
+            // clk-common.ko mtk_pll_set_rate with the stock USBPLL
+            // descriptor: CON0 PCW/post-divider, CON1 PCW_CHG, 20 us delay.
+            // Only a blank dedicated PLL with its outputs isolated and both
+            // USB gates closed may inherit the previous D0 rate.
+            Method (MPRG, 1, NotSerialized)
+            {
+                Store (And (Subtract (Arg0, One), 0xFC), Local0)
+                If (LEqual (Local0, 0xFC)) { Return (Zero) }
+                Store (MREF (), Local1)
+                If (LOr (LNot (Local1), LNotEqual (Local1, Subtract (Arg0, Local0)))) { Return (Zero) }
+                Store (MUPC, Local2)
+                If (LOr (And (Local2, 0x07BFFFFF), LNot (MISO ()))) { Return (Zero) }
+                If (LNotEqual (MUPC, Local2)) { Return (Zero) }
+                Store (Or (Local2, Add (0x17FFE1, ShiftRight (Local0, 2))), MUPC)
+                If (LOr (LNot (MPCK (Arg0, 2)), LNot (MISO ()))) { Return (Zero) }
+                Store (Or (MUPD, 0x80000000), MUPD)
+                Stall (20)
+                Return (LAnd (MPCK (Arg0, 2), MISO ()))
+            }
+
+            // clk-common.ko mtk_pll_prepare and CLK_CFG_9_CLR. MPRG can
+            // restore a blank USBPLL. The shared UNIVPLL and selector are read-only.
+            Method (MGON, 1, Serialized)
+            {
+                If (LOr (LEqual (Arg0, Zero), LGreater (Arg0, 0xFFFFFFFF))) { Return (Zero) }
+                If (LNotEqual (MCID (), Arg0))
+                {
+                    If (LNot (MPRG (Arg0))) { Return (Zero) }
+                }
+                Store (MUPW, Local0)
+                If (LNotEqual (And (Local0, 7), 5))
+                {
+                    // Begin in the fully isolated stock off state.
+                    If (LOr (LNotEqual (And (Local0, 7), 2), And (MUPC, 0x00800000))) { Return (Zero) }
+                    Store (Or (Local0, One), MUPW)
+                    Stall (One)
+                    If (LNot (MPCK (Arg0, 3))) { Return (Zero) }
+                    Store (And (MUPW, 0xFFFFFFFD), MUPW)
+                    Stall (One)
+                    If (LNot (MPCK (Arg0, One))) { Return (Zero) }
+                    Store (Or (MUPW, 4), MUPW)
+                    Stall (20)
+                    If (LNot (MPCK (Arg0, 5))) { Return (Zero) }
+                    Store (Or (MUPC, 0x00800000), MUPC)
+                    If (LNot (And (MUPC, 0x00800000))) { Return (Zero) }
+                }
+
+                If (LOr (LNot (MPCK (Arg0, 5)), LNot (And (MUPC, 0x00800000)))) { Return (Zero) }
+                If (And (MUMX, 0x80000000)) { Store (0x80000000, MUTC) }
+                If (And (MUMX, 0x80000000)) { Return (Zero) }
+                If (LOr (LNot (MPCK (Arg0, 5)), LNot (And (MUPC, 0x00800000)))) { Return (Zero) }
+                If (And (MUGT, 2)) { Store (2, MUGC) }
+                Store (MCLK (), Local0)
+                If (LNotEqual (Local0, Arg0)) { Return (Zero) }
+                Return (Local0)
+            }
+
             Method (MHRD, 0, Serialized)
             {
                 If (LAnd (LEqual (MRAD, One),
@@ -298,7 +424,8 @@ DefinitionBlock ("", "DSDT", 2, "TECLST", "T70PRO  ", 1)
                 Memory32Fixed (ReadWrite, 0x11200000, 0x10000)
                 Memory32Fixed (ReadOnly, 0x43F7F100, 0x40)
                 // T70 USB2 PHY, used to verify the live host data path.
-                Memory32Fixed (ReadOnly, 0x11F40000, 0x10000)
+                // Stock generic TPHY child owns 0x700 bytes at this base.
+                Memory32Fixed (ReadWrite, 0x11F40000, 0x700)
                 Interrupt (ResourceConsumer, Level, ActiveHigh, Exclusive) { 160 }
             })
         }
