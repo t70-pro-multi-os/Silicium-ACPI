@@ -432,6 +432,47 @@ DefinitionBlock ("", "DSDT", 2, "TECLST", "T70PRO  ", 1)
                 Return (Local0)
             }
 
+            OperationRegion (UGIO, SystemMemory, 0x10005000, 0x3D4)
+            Field (UGIO, DWordAcc, NoLock, Preserve)
+            {
+                UDR0, 32, Offset (0x020), UDR2, 32, Offset (0x030), UDR3, 32,
+                Offset (0x200), UDI0, 32, Offset (0x220), UDI2, 32, Offset (0x230), UDI3, 32,
+                Offset (0x300), UMD0, 32, Offset (0x310), UMD1, 32,
+                Offset (0x3A0), UMA0, 32, Offset (0x3C0), UMC0, 32, Offset (0x3D0), UMD3, 32
+            }
+            // GPIO10 ID input, GPIO4 hub 5V, GPIO86 boost, GPIO99 mux,
+            // GPIO104 hub reset. Check physical levels in GPIO mode.
+            Method (MRGP, 1, NotSerialized)
+            {
+                If (Or (Or (And (UMD0, 0xF0000), And (UMD1, 0xF00)),
+                    Or (And (UMA0, 0xF000000), Or (And (UMC0, 0xF000), And (UMD3, 0xF)))))
+                { Return (Zero) }
+                If (LOr (LNotEqual (And (UDR0, 0x410), 0x10),
+                    LOr (LNot (And (UDR2, 0x400000)), LNotEqual (And (UDR3, 0x108), 0x108))))
+                { Return (Zero) }
+                Store (And (UDI0, 0x410), Local0)
+                Store (And (UDI2, 0x400000), Local1)
+                Store (And (UDI3, 0x108), Local2)
+                If (LEqual (Arg0, 3))
+                {
+                    // Type-C alone, ID high and the hub mux and 5V off.
+                    Return (LAnd (LEqual (Local0, 0x400), LAnd (Local1, LNot (And (Local2, 8)))))
+                }
+                // Either hub path keeps ID low, mux, 5V and reset released.
+                Store (0x400000, Local3)
+                If (LEqual (Arg0, 2)) { Store (Zero, Local3) }
+                Return (LAnd (LEqual (Local0, 0x10), LAnd (LEqual (Local2, 0x108),
+                    LEqual (Local1, Local3))))
+            }
+            // The caller supplies the route accepted at first D0. Report
+            // only that route's live state, without touching any GPIO or TCPC.
+            Method (MROU, 1, Serialized)
+            {
+                If (LOr (LGreater (Arg0, 3), LNot (MRGP (Arg0)))) { Return (Zero) }
+                If (MRGP (Arg0)) { Return (One) }
+                Return (Zero)
+            }
+
             Method (MHRD, 0, Serialized)
             {
                 If (LAnd (LEqual (MRAD, One),
