@@ -535,6 +535,169 @@ DefinitionBlock ("", "DSDT", 2, "TECLST", "T70PRO  ", 1)
                 If (\_SB.GPO0.GRDY ()) { Return (0x0F) }
                 Return (Zero)
             }
+
+            // MT6789 TOP_MSDC30_1_SEL and IFRAO_MSDC1/SRC. Only change
+            // MSDC1 fields and write-one aliases. Keep AXI/PLLs read-only.
+            OperationRegion (SCTP, SystemMemory, 0x10000000, 0x8C)
+            Field (SCTP, DWordAcc, NoLock, WriteAsZeros)
+            {
+                Offset (0x04), SCUP, 32,
+                Offset (0x80), SCMX, 32, Offset (0x88), SCCL, 32
+            }
+            OperationRegion (SCIF, SystemMemory, 0x10001088, 0x10)
+            Field (SCIF, DWordAcc, NoLock, WriteAsZeros)
+            { SCSE, 32, SCEN, 32, Offset (0x0C), SCST, 32 }
+            OperationRegion (SCTN, SystemMemory, 0x11EF0000, 8)
+            Field (SCTN, DWordAcc, NoLock, WriteAsZeros)
+            { SCT0, 32, SCT1, 32 }
+
+            OperationRegion (SDGP, SystemMemory, 0x10005000, 0x3A0)
+            Field (SDGP, DWordAcc, NoLock, WriteAsZeros)
+            {
+                SDD0, 32, Offset (0x20), SDDR, 32, Offset (0x28), SDDC, 32,
+                Offset (0x200), SDIN, 32, Offset (0x300), SDM0, 32,
+                Offset (0x380), SDM1, 32, Offset (0x38C), SDW1, 32,
+                SDM2, 32, Offset (0x39C), SDW2, 32
+            }
+            OperationRegion (SDRT, SystemMemory, 0x11EA0000, 0xFC)
+            Field (SDRT, DWordAcc, NoLock, WriteAsZeros)
+            {
+                Offset (0x30), PDRV, 32, PDVS, 32, PDVC, 32,
+                Offset (0x80), PIES, 32, PISS, 32,
+                Offset (0xB0), PUPD, 32, PUPS, 32, PUPC, 32,
+                Offset (0xE0), PRZV, 32, PRZS, 32, PRZC, 32,
+                Offset (0xF0), PROV, 32, PROS, 32, PROC, 32
+            }
+
+            // The card detect input is active high. GPIO7 must be an input
+            // in GPIO mode, and the GPIO driver owns its both-edge interrupt.
+            Method (SDCD, 0, Serialized)
+            {
+                If (LNot (\_SB.GPO0.GRDY ())) { Return (2) }
+                If (LOr (And (SDD0, 0x80), And (SDM0, 0x70000000))) { Return (2) }
+                Store (SDIN, Local0)
+                If (LEqual (Local0, 0xFFFFFFFF)) { Return (2) }
+                If (And (Local0, 0x80)) { Return (One) }
+                Return (Zero)
+            }
+
+            Method (SDEL, 0, NotSerialized)
+            {
+                Store (PIES, Local0)
+                If (LOr (LEqual (Local0, 0xFFFFFFFF), And (SDDR, 0x1F00))) { Return (Zero) }
+                If (LNotEqual (And (Local0, 0x7C), 0x7C)) { Return (Zero) }
+                If (LNotEqual (And (PDRV, 0x07FFFE00), 0x036DB600)) { Return (Zero) }
+                If (LNotEqual (And (PUPD, 0x3F), One)) { Return (Zero) }
+                If (LNotEqual (And (PRZV, 0x3F), 0x3E)) { Return (Zero) }
+                Return (LEqual (And (PROV, 0x3F), One))
+            }
+
+            Method (SDPD, 0, NotSerialized)
+            {
+                Return (LAnd (SDEL (), LAnd (
+                    LEqual (And (SDM1, 0x70000000), 0x10000000),
+                    LEqual (And (SDM2, 0x77777), 0x11111))))
+            }
+
+            // Stock pinctrl default state, also used by GpioImplLib.
+            // The source gate is closed for the entire electrical change.
+            Method (SDPC, 0, NotSerialized)
+            {
+                If (LNotEqual (And (SCST, 0x10010), 0x10000)) { Return (Zero) }
+                If (SDPD ()) { Return (One) }
+                If (LEqual (SDDR, 0xFFFFFFFF)) { Return (Zero) }
+                If (LOr (LEqual (SDM1, 0xFFFFFFFF), LEqual (SDM2, 0xFFFFFFFF))) { Return (Zero) }
+                If (LOr (LEqual (PIES, 0xFFFFFFFF), LEqual (PDRV, 0xFFFFFFFF))) { Return (Zero) }
+                If (LOr (LEqual (PUPD, 0xFFFFFFFF), LEqual (PRZV, 0xFFFFFFFF))) { Return (Zero) }
+                If (LEqual (PROV, 0xFFFFFFFF)) { Return (Zero) }
+                Store (0x1F00, SDDC)
+                Store (0x7C, PISS)
+                Store (0x04924800, PDVC)
+                Store (0x036DB600, PDVS)
+                Store (0x3E, PUPC) Store (One, PUPS)
+                Store (One, PRZC) Store (0x3E, PRZS)
+                Store (0x3E, PROC) Store (One, PROS)
+                If (LNot (SDEL ())) { Return (Zero) }
+                Store (0x90000000, SDW1)
+                Store (0x99999, SDW2)
+                Return (SDPD ())
+            }
+
+            Method (SDBS, 0, NotSerialized)
+            {
+                Store (IAXI, Local0)
+                If (LOr (LEqual (Local0, 0xFFFFFFFF), LGreater (And (Local0, 7), 5))) { Return (Zero) }
+                If (LAnd (And (Local0, 7), LNot (IPLF (Zero)))) { Return (Zero) }
+                Return (LEqual (IAXI, Local0))
+            }
+
+            // 0 opens HCLK. 1 isolates the source and selects OSC26M.
+            // 2 opens the prepared source. 3 closes source and HCLK.
+            // The host ends commands/DMA and stops its card clock before 1/3.
+            Method (SCOP, 1, Serialized)
+            {
+                If (LOr (LGreater (Arg0, 3), LNot (SDBS ()))) { Return (Zero) }
+                Store (SCST, Local0)
+                If (LEqual (Local0, 0xFFFFFFFF)) { Return (Zero) }
+                If (LEqual (Arg0, Zero))
+                {
+                    If (And (Local0, 0x10)) { Store (0x10, SCEN) }
+                    Store (SCST, Local0)
+                    If (LNot (And (Local0, 0x10))) { Return (One) }
+                    Return (Zero)
+                }
+                If (LEqual (Arg0, 2))
+                {
+                    If (LOr (And (Local0, 0x10), LOr (And (SCMX, 0x8700), LNot (SDPD ()))))
+                    { Return (Zero) }
+                    If (And (Local0, 0x10000)) { Store (0x10000, SCEN) }
+                    If (LAnd (SDBS (), LNot (LOr (And (SCST, 0x10010), And (SCMX, 0x8700)))))
+                    { Return (One) }
+                    Store (0x10000, SCSE)
+                    Return (Zero)
+                }
+
+                If (LAnd (LEqual (Arg0, 3), LEqual (And (Local0, 0x10010), 0x10010)))
+                { Return (One) }
+                If (And (Local0, 0x10)) { Return (Zero) }
+                If (LNot (And (Local0, 0x10000))) { Store (0x10000, SCSE) }
+                Store (SCST, Local1)
+                If (LNotEqual (And (Local1, 0x10010), 0x10000)) { Return (Zero) }
+                If (LEqual (Arg0, 3))
+                {
+                    Store (0x10, SCSE)
+                    Store (SCST, Local1)
+                    If (LAnd (LNotEqual (Local1, 0xFFFFFFFF), LEqual (And (Local1, 0x10010), 0x10010)))
+                    { Return (One) }
+                    Return (Zero)
+                }
+
+                Store (SCMX, Local2)
+                If (LEqual (Local2, 0xFFFFFFFF)) { Return (Zero) }
+                If (And (Local2, 0x700))
+                {
+                    Store (0x700, SCCL)
+                    Store (0x20000000, SCUP)
+                }
+                If (And (Local2, 0x8000)) { Store (0x8000, SCCL) }
+                If (LAnd (LNot (And (SCMX, 0x8700)),
+                    LAnd (LEqual (And (SCST, 0x10010), 0x10000), SDPC ())))
+                { Return (One) }
+                Return (Zero)
+            }
+
+            // Enhanced RX and primary/secondary input delay selection for
+            // the MT6789 MSDC1 top block. Called during host reset only.
+            Method (SDTC, 0, Serialized)
+            {
+                If (LOr (LNot (SDBS ()), LOr (And (SCST, 0x10010), And (SCMX, 0x8700))))
+                { Return (Zero) }
+                Store (0xB000, SCT0)
+                Store (0xC00, SCT1)
+                If (LAnd (LEqual (SCT0, 0xB000), LEqual (SCT1, 0xC00))) { Return (One) }
+                Return (Zero)
+            }
+
             Name (_CRS, ResourceTemplate ()
             {
                 Memory32Fixed (ReadWrite, 0x11240000, 0x1000)
