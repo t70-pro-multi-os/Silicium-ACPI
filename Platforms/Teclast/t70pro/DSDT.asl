@@ -375,6 +375,63 @@ DefinitionBlock ("", "DSDT", 2, "TECLST", "T70PRO  ", 1)
                 Return (Local0)
             }
 
+            // Only the Type-C host path uses the TCPC over I2C6.
+            Method (_DEP, 0, NotSerialized)
+            {
+                If (LAnd (LEqual (MREV, 2), LEqual (MHPW, 2)))
+                { Return (Package () {}) }
+                Return (Package () { \_SB.I2C6 })
+            }
+            Name (TREG, Zero)
+            OperationRegion (TCIO, GenericSerialBus, Zero, 0x100)
+            Field (TCIO, BufferAcc, NoLock, Preserve)
+            {
+                Connection (I2cSerialBusV2 (0x4E, ControllerInitiated, 400000,
+                    AddressingMode7Bit, "\\_SB.I2C6", 0, ResourceConsumer, , Exclusive, )),
+                AccessAs (BufferAcc, AttribByte),
+                TVL0, 8, TVH0, 8, TDL0, 8, TDH0, 8,
+                Offset (0x1A), TROL, 8,
+                Offset (0x1D), TCCS, 8, TPWR, 8,
+                Offset (0x97), TVS0, 8
+            }
+            Method (_REG, 2, Serialized)
+            {
+                If (LEqual (Arg0, 0x09)) { Store (LEqual (Arg1, One), TREG) }
+            }
+            Method (TCRD, 1, NotSerialized)
+            {
+                // AttribByte result contains status, reserved byte and data.
+                If (LNotEqual (ObjectType (Arg0), 3)) { Return (0x100) }
+                If (LLess (SizeOf (Arg0), 3)) { Return (0x100) }
+                If (DerefOf (Index (Arg0, Zero))) { Return (0x100) }
+                Return (DerefOf (Index (Arg0, 2)))
+            }
+            Method (TCSM, 0, NotSerialized)
+            {
+                Store (TCRD (TROL), Local0)
+                Store (TCRD (TCCS), Local1)
+                Store (TCRD (TPWR), Local2)
+                Store (TCRD (TVS0), Local3)
+                If (LGreater (Or (Or (Local0, Local1), Or (Local2, Local3)), 0xFF)) { Return (Zero) }
+                // Detection enabled, TCPC initialized, VBUS present, safe0V clear.
+                If (LOr (LNotEqual (And (Local2, 0x4C), 0x0C), And (Local3, 2))) { Return (Zero) }
+                Return (Or (0x01000000, Or (ShiftLeft (Local0, 16),
+                    Or (ShiftLeft (Local1, 8), Local2))))
+            }
+            // A stable HUSB311 snapshot brackets the individual register
+            // reads. The driver decodes the role and CC termination.
+            Method (MTCV, 0, Serialized)
+            {
+                If (LNot (LAnd (TREG, \_SB.I2C6.IRDY ()))) { Return (Zero) }
+                // HUSB311 vendor 0x2E99 and product 0x0311.
+                If (LOr (LNotEqual (TCRD (TVL0), 0x99), LNotEqual (TCRD (TVH0), 0x2E))) { Return (Zero) }
+                If (LOr (LNotEqual (TCRD (TDL0), 0x11), LNotEqual (TCRD (TDH0), 3))) { Return (Zero) }
+                Store (TCSM (), Local0)
+                If (LNot (Local0)) { Return (Zero) }
+                If (LNotEqual (TCSM (), Local0)) { Return (Zero) }
+                Return (Local0)
+            }
+
             Method (MHRD, 0, Serialized)
             {
                 If (LAnd (LEqual (MRAD, One),
