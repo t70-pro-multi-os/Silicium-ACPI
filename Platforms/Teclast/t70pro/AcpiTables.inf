@@ -14,6 +14,7 @@
   Audio.asl
   Btif.asl
   Connectivity.asl
+  Cellular.asl
 
 [Packages]
   ArmPkg/ArmPkg.dec
