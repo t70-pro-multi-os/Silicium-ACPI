@@ -4,12 +4,15 @@
 // Stock status is absent (enabled by DT default). No Windows BT driver is supplied.
 DefinitionBlock ("", "SSDT", 2, "T70PRO", "T70BTIF", 1)
 {
+    External (\_SB.WCN0, DeviceObj)
+
     Scope (\_SB)
     {
         Device (BTI0)
         {
             Name (_HID, "HANA6795")
             Name (_UID, Zero)
+            Name (_DEP, Package () { \_SB.WCN0 })
             Name (_DDN, "MediaTek BTIF controller (enumeration only)")
             // Present, enabled, visible; do not assert functioning (bit 3).
             // Windows enumeration itself remains unverified.
