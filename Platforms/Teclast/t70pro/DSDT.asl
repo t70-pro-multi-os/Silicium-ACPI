@@ -538,10 +538,13 @@ DefinitionBlock ("", "DSDT", 2, "TECLST", "T70PRO  ", 1)
             Name (_CRS, ResourceTemplate ()
             {
                 Memory32Fixed (ReadWrite, 0x11240000, 0x1000)
-                Memory32Fixed (ReadWrite, 0x11EF0000, 0x1000)
                 Interrupt (ResourceConsumer, Level, ActiveHigh, Exclusive) { 167 }
+                // Report both card transitions through the same GPIO used for presence.
+                GpioInt (Edge, ActiveBoth, Exclusive, PullDefault, 0,
+                    "\\_SB.GPO0", 0, ResourceConsumer, , ) { 7 }
                 GpioIo (Exclusive, PullDefault, 0, 0, IoRestrictionInputOnly,
                     "\\_SB.GPO0", 0, ResourceConsumer, , ) { 7 }
+                Memory32Fixed (ReadWrite, 0x11EF0000, 0x1000)
             })
             Name (_DSD, Package ()
             {
@@ -550,7 +553,7 @@ DefinitionBlock ("", "DSDT", 2, "TECLST", "T70PRO  ", 1)
                 {
                     Package () { "bus-width", 4 },
                     Package () { "max-frequency", 200000000 },
-                    Package () { "cd-gpios", Package () { SDC1, Zero, Zero, Zero } }
+                    Package () { "cd-gpios", Package () { SDC1, One, Zero, Zero } }
                 }
             })
         }
