@@ -13,6 +13,7 @@
   DSDT.asl
   Audio.asl
   Btif.asl
+  Connectivity.asl
 
 [Packages]
   ArmPkg/ArmPkg.dec
