@@ -753,11 +753,47 @@ DefinitionBlock ("", "DSDT", 2, "TECLST", "T70PRO  ", 1)
             })
         }
 
+        // MT6789 PSCI CPU_SUSPEND states from the stock DT /cpus/idle-states.
+        // Core-off stops the local timer and loses core context (Arm DEN0048).
+        // Include entry plus exit time because the DT has no wakeup-latency-us.
+        // These are leaf states; cluster and system idle need a wake contract.
+        Name (LPNC, ResourceTemplate ()
+        {
+            Register (SystemMemory, 0, 0, 0, 0)
+        })
+        Name (LPWF, Package ()
+        {
+            One, One, One, Zero, Zero, Zero,
+            ResourceTemplate () { Register (FFixedHW, 32, 0, 0xFFFFFFFF, 3) },
+            LPNC, LPNC, "WFI"
+        })
+        Name (LPIE, Package ()
+        {
+            Zero, Zero, 2, LPWF,
+            Package ()
+            {
+                1600, 150, One, One, Zero, Zero,
+                ResourceTemplate () { Register (FFixedHW, 32, 0, 0x00010001, 3) },
+                LPNC, LPNC, "A55 core off"
+            }
+        })
+        Name (LPIP, Package ()
+        {
+            Zero, Zero, 2, LPWF,
+            Package ()
+            {
+                1400, 150, One, One, Zero, Zero,
+                ResourceTemplate () { Register (FFixedHW, 32, 0, 0x00010002, 3) },
+                LPNC, LPNC, "A76 core off"
+            }
+        })
+
         Device (CPU0)
         {
             Name (_HID, "ACPI0007")
             Name (_UID, 0)
             Name (_STA, 0x0F)
+            Method (_LPI, 0, NotSerialized) { Return (\_SB.LPIE) }
         }
 
         Device (CPU1)
@@ -765,6 +801,7 @@ DefinitionBlock ("", "DSDT", 2, "TECLST", "T70PRO  ", 1)
             Name (_HID, "ACPI0007")
             Name (_UID, 1)
             Name (_STA, 0x0F)
+            Method (_LPI, 0, NotSerialized) { Return (\_SB.LPIE) }
         }
 
         Device (CPU2)
@@ -772,6 +809,7 @@ DefinitionBlock ("", "DSDT", 2, "TECLST", "T70PRO  ", 1)
             Name (_HID, "ACPI0007")
             Name (_UID, 2)
             Name (_STA, 0x0F)
+            Method (_LPI, 0, NotSerialized) { Return (\_SB.LPIE) }
         }
 
         Device (CPU3)
@@ -779,6 +817,7 @@ DefinitionBlock ("", "DSDT", 2, "TECLST", "T70PRO  ", 1)
             Name (_HID, "ACPI0007")
             Name (_UID, 3)
             Name (_STA, 0x0F)
+            Method (_LPI, 0, NotSerialized) { Return (\_SB.LPIE) }
         }
 
         Device (CPU4)
@@ -786,6 +825,7 @@ DefinitionBlock ("", "DSDT", 2, "TECLST", "T70PRO  ", 1)
             Name (_HID, "ACPI0007")
             Name (_UID, 4)
             Name (_STA, 0x0F)
+            Method (_LPI, 0, NotSerialized) { Return (\_SB.LPIE) }
         }
 
         Device (CPU5)
@@ -793,6 +833,7 @@ DefinitionBlock ("", "DSDT", 2, "TECLST", "T70PRO  ", 1)
             Name (_HID, "ACPI0007")
             Name (_UID, 5)
             Name (_STA, 0x0F)
+            Method (_LPI, 0, NotSerialized) { Return (\_SB.LPIE) }
         }
 
         Device (CPU6)
@@ -800,6 +841,7 @@ DefinitionBlock ("", "DSDT", 2, "TECLST", "T70PRO  ", 1)
             Name (_HID, "ACPI0007")
             Name (_UID, 6)
             Name (_STA, 0x0F)
+            Method (_LPI, 0, NotSerialized) { Return (\_SB.LPIP) }
         }
 
         Device (CPU7)
@@ -807,6 +849,7 @@ DefinitionBlock ("", "DSDT", 2, "TECLST", "T70PRO  ", 1)
             Name (_HID, "ACPI0007")
             Name (_UID, 7)
             Name (_STA, 0x0F)
+            Method (_LPI, 0, NotSerialized) { Return (\_SB.LPIP) }
         }
     }
 }
