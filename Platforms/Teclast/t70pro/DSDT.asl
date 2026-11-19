@@ -376,10 +376,13 @@ DefinitionBlock ("", "DSDT", 2, "TECLST", "T70PRO  ", 1)
             }
 
             // Only the Type-C host path uses the TCPC over I2C6.
+            Method (MPGO, 0, NotSerialized)
+            {
+                Return (LAnd (LEqual (MREV, 2), LEqual (MHPW, 2)))
+            }
             Method (_DEP, 0, NotSerialized)
             {
-                If (LAnd (LEqual (MREV, 2), LEqual (MHPW, 2)))
-                { Return (Package () {}) }
+                If (MPGO ()) { Return (Package () {}) }
                 Return (Package () { \_SB.I2C6 })
             }
             Name (TREG, Zero)
@@ -387,7 +390,7 @@ DefinitionBlock ("", "DSDT", 2, "TECLST", "T70PRO  ", 1)
             Field (TCIO, BufferAcc, NoLock, Preserve)
             {
                 Connection (I2cSerialBusV2 (0x4E, ControllerInitiated, 400000,
-                    AddressingMode7Bit, "\\_SB.I2C6", 0, ResourceConsumer, , Exclusive, )),
+                    AddressingMode7Bit, "\\_SB.I2C6", 0, ResourceConsumer, , Shared, )),
                 AccessAs (BufferAcc, AttribByte),
                 TVL0, 8, TVH0, 8, TDL0, 8, TDH0, 8,
                 Offset (0x1A), TROL, 8,
@@ -517,7 +520,7 @@ DefinitionBlock ("", "DSDT", 2, "TECLST", "T70PRO  ", 1)
                 If (MHRD ()) { Return (0x0F) }
                 Return (Zero)
             }
-            Name (_CRS, ResourceTemplate ()
+            Name (UCRS, ResourceTemplate ()
             {
                 Memory32Fixed (ReadWrite, 0x11200000, 0x10000)
                 Memory32Fixed (ReadOnly, 0x43F7F100, 0x40)
@@ -526,6 +529,17 @@ DefinitionBlock ("", "DSDT", 2, "TECLST", "T70PRO  ", 1)
                 Memory32Fixed (ReadWrite, 0x11F40000, 0x700)
                 Interrupt (ResourceConsumer, Level, ActiveHigh, Exclusive) { 160 }
             })
+            Name (UTCR, ResourceTemplate ()
+            {
+                // MtkUsb uses the same TCPC as the older MTCV method over I2C6.
+                I2cSerialBusV2 (0x4E, ControllerInitiated, 400000,
+                    AddressingMode7Bit, "\\_SB.I2C6", 0, ResourceConsumer, , Shared, )
+            })
+            Method (_CRS, 0, NotSerialized)
+            {
+                If (MPGO ()) { Return (UCRS) }
+                Return (ConcatenateResTemplate (UCRS, UTCR))
+            }
         }
 
         Device (DISP)
