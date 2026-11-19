@@ -4,12 +4,16 @@
 // Stock wifi@18000000 maps reg[0]; consys subranges lie inside this aperture.
 DefinitionBlock ("", "SSDT", 2, "T70PRO", "T70WCON", 1)
 {
+    External (\_SB.MFG0, DeviceObj)
+    External (\_SB.GPO0, DeviceObj)
+
     Scope (\_SB)
     {
         Device (WCN0)
         {
             Name (_HID, "HANA6796")
             Name (_UID, Zero)
+            Name (_DEP, Package () { \_SB.MFG0, \_SB.GPO0 })
             Name (_DDN, "MT6789 shared WLAN/conninfra AXI window")
             // Keep the device enumerable while radio transports are separate.
             Name (_STA, 0x07)
