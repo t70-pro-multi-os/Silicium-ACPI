@@ -22,7 +22,9 @@ DefinitionBlock ("", "SSDT", 2, "T70PRO", "T70WCON", 1)
                 Memory32Fixed (ReadWrite, 0x18000000, 0x00100000)
                 // CONN reset is one keyed bit in the RGU register at +0x18.
                 Memory32Fixed (ReadWrite, 0x10007018, 0x00000004)
-                // WLAN DT interrupt[0]: SPI409 + 32; flags4 level/high.
+                // BTCVSD DT interrupt[0]: SPI407 + 32; level/high.
+                Interrupt (ResourceConsumer, Level, ActiveHigh, Exclusive) { 439 }
+                // WLAN DT interrupt[0]: SPI409 + 32; level/high.
                 Interrupt (ResourceConsumer, Level, ActiveHigh, Exclusive) { 441 }
             })
             // The CONN owner obtains SPM and GPIO through the SoC and GPIO

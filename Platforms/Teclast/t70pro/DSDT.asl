@@ -16,9 +16,16 @@ DefinitionBlock ("", "DSDT", 2, "TECLST", "T70PRO  ", 1)
             IREV, 32
         }
 
-        // Read-only retained-I2C validation. No clock/PLL/pin restoration is
-        // attempted here. Addresses and polarities match the MT6789 clock and
-        // I2C board providers; neither IRAD nor ICL0/6 proves runtime retention.
+        // I2C1 extends the ready mask (bit 2) with a separate rate after MUSB.
+        OperationRegion (I1HO, SystemMemory, 0x43F7F140, 4)
+        Field (I1HO, DWordAcc, NoLock, Preserve) { ICL1, 32 }
+        OperationRegion (PWHO, SystemMemory, 0x43F7F144, 4)
+        Field (PWHO, DWordAcc, NoLock, Preserve) { PARD, 32 }
+
+        // Retained I2C clock/pin validation. USB also uses the TOP and INFRA
+        // status and gate-clear registers here for its D0 recovery.
+        // Addresses and polarities match the MT6789 clock and
+        // I2C board providers; the boot handoff does not prove runtime retention.
         OperationRegion (ITOP, SystemMemory, 0x10000000, 0x100)
         Field (ITOP, DWordAcc, NoLock, Preserve)
         { Offset (0x10), IAXI, 32, Offset (0xA0), MUMX, 32,
@@ -33,10 +40,11 @@ DefinitionBlock ("", "DSDT", 2, "TECLST", "T70PRO  ", 1)
             Offset (0x38), MPC0, 32, MPC1, 32,
             Offset (0x44), MPWR, 32
         }
-        OperationRegion (IWST, SystemMemory, 0x11E02E00, 4)
-        Field (IWST, DWordAcc, NoLock, Preserve) { IWG0, 32 }
-        OperationRegion (ICST, SystemMemory, 0x1101BE00, 4)
-        Field (ICST, DWordAcc, NoLock, Preserve) { IWG6, 32 }
+        // MT6789 IMP I2C wrapper status and write-one clock enable aliases.
+        OperationRegion (IWST, SystemMemory, 0x11E02E00, 8)
+        Field (IWST, DWordAcc, NoLock, Preserve) { IWG0, 32, IWC0, 32 }
+        OperationRegion (ICST, SystemMemory, 0x1101BE00, 8)
+        Field (ICST, DWordAcc, NoLock, Preserve) { IWG6, 32, IWC6, 32 }
         OperationRegion (IPIO, SystemMemory, 0x10005240, 0x1D4)
         Field (IPIO, DWordAcc, NoLock, Preserve)
         { IPIN, 32, Offset (0x1C0), IPM0, 32, Offset (0x1D0), IPM6, 32 }
@@ -48,6 +56,11 @@ DefinitionBlock ("", "DSDT", 2, "TECLST", "T70PRO  ", 1)
         Field (IDS0, DWordAcc, NoLock, Preserve) { IDM0, 32 }
         OperationRegion (IDS6, SystemMemory, 0x10217488, 4)
         Field (IDS6, DWordAcc, NoLock, Preserve) { IDM6, 32 }
+
+        OperationRegion (ICS1, SystemMemory, 0x11E01024, 2)
+        Field (ICS1, WordAcc, NoLock, Preserve) { IST1, 16 }
+        OperationRegion (IDS1, SystemMemory, 0x10217108, 4)
+        Field (IDS1, DWordAcc, NoLock, Preserve) { IDM1, 32 }
 
         // Same 26MHz/22-bit PCW and post-divider arithmetic as ClockDxe.
         Method (IPLF, 1, NotSerialized)
@@ -92,32 +105,92 @@ DefinitionBlock ("", "DSDT", 2, "TECLST", "T70PRO  ", 1)
             If (LOr (LLess (Local3, 1000000), LGreater (Local3, 1000000000))) { Return (Zero) }
             Return (Local3)
         }
+        Method (IPCK, 1, NotSerialized)
+        {
+            If (LEqual (Arg0, Zero))
+            {
+                Return (LAnd (LEqual (And (IPM0, 0xFF00), 0x1100),
+                    LEqual (And (IPIN, 0x0C), 0x0C)))
+            }
+            If (LEqual (Arg0, One))
+            {
+                Return (LAnd (LEqual (And (IPM6, 0xFF000000), 0x11000000),
+                    LEqual (And (IPIN, 0xC000), 0xC000)))
+            }
+            If (LEqual (Arg0, 2))
+            {
+                Return (LAnd (LEqual (And (IPM0, 0xFF0000), 0x110000),
+                    LEqual (And (IPIN, 0x30), 0x30)))
+            }
+            Return (Zero)
+        }
         Method (ILCK, 1, Serialized)
         {
-            If (LGreater (Arg0, One)) { Return (Zero) }
+            If (LGreater (Arg0, 2)) { Return (Zero) }
             Store (ICFR (), Local0)
             If (LEqual (Local0, Zero)) { Return (Zero) }
             Store (Zero, Local1)
             While (LLess (Local1, 2))
             {
                 // Check every upstream/endpoint clock before controller MMIO.
-                If (LNotEqual (ICFR (), Local0)) { Return (Zero) }
-                If (Arg0)
+                If (LOr (LNotEqual (ICFR (), Local0), LNot (IPCK (Arg0)))) { Return (Zero) }
+                If (LEqual (Arg0, One))
                 {
-                    If (LOr (And (IWG6, 4), LOr (LNotEqual (And (IPM6, 0xFF000000), 0x11000000),
-                        LNotEqual (And (IPIN, 0xC000), 0xC000)))) { Return (Zero) }
+                    If (And (IWG6, 4)) { Return (Zero) }
                     If (LOr (And (IST6, One), And (IDM6, One))) { Return (Zero) }
+                }
+                ElseIf (LEqual (Arg0, 2))
+                {
+                    If (And (IWG0, 2)) { Return (Zero) }
+                    If (LOr (And (IST1, One), And (IDM1, One))) { Return (Zero) }
                 }
                 Else
                 {
-                    If (LOr (And (IWG0, One), LOr (LNotEqual (And (IPM0, 0xFF00), 0x1100),
-                        LNotEqual (And (IPIN, 0x0C), 0x0C)))) { Return (Zero) }
+                    If (And (IWG0, One)) { Return (Zero) }
                     If (LOr (And (IST0, One), And (IDM0, One))) { Return (Zero) }
                 }
                 Increment (Local1)
                 If (LLess (Local1, 2)) { Stall (10) }
             }
             If (LNotEqual (ICFR (), Local0)) { Return (Zero) }
+            Return (Local0)
+        }
+        // Resume only after the host stopped its controller and DMA. The APDMA
+        // status is independently clocked; never read the gated controller.
+        // Leave shared clocks and other wrapper bits alone, even on failure.
+        Method (IRES, 1, Serialized)
+        {
+            If (LOr (LGreater (Arg0, 2), LNotEqual (IREV, One))) { Return (Zero) }
+            If (LNot (And (IRAD, ShiftLeft (One, Arg0)))) { Return (Zero) }
+            Store (ICFR (), Local0)
+            If (LOr (LEqual (Local0, Zero), LNot (IPCK (Arg0)))) { Return (Zero) }
+            Stall (10)
+            If (LOr (LNotEqual (ICFR (), Local0), LNot (IPCK (Arg0)))) { Return (Zero) }
+
+            If (LEqual (Arg0, One))
+            {
+                Store (IWG6, Local1)
+                If (LOr (LEqual (Local1, 0xFFFFFFFF), And (IDM6, One))) { Return (Zero) }
+                If (And (Local1, 4)) { Store (4, IWC6) }
+            }
+            Else
+            {
+                Store (IWG0, Local1)
+                If (LEqual (Local1, 0xFFFFFFFF)) { Return (Zero) }
+                If (LEqual (Arg0, 2))
+                {
+                    If (And (IDM1, One)) { Return (Zero) }
+                    If (And (Local1, 2)) { Store (2, IWC0) }
+                }
+                Else
+                {
+                    If (And (IDM0, One)) { Return (Zero) }
+                    If (And (Local1, One)) { Store (One, IWC0) }
+                }
+            }
+
+            Stall (10)
+            If (LNotEqual (ILCK (Arg0), Local0)) { Return (Zero) }
             Return (Local0)
         }
 
@@ -235,9 +308,27 @@ DefinitionBlock ("", "DSDT", 2, "TECLST", "T70PRO  ", 1)
         Device (GPU0)
         {
             Name (_HID, "HANA678E")
-            Name (_DEP, Package () { \_SB.MFG0 })
+            // No _DEP on MFG0: the firmware powers the GPU and MFG0 has no driver,
+            // so a dependency would keep GPU0 from ever starting.
             Name (_UID, Zero)
-            Name (_STA, 0x0F)
+            // GpuPowerDxe record (0x43F7F500): present only when the firmware
+            // powered the GPU and GPU_ID read back as a Mali-G57: arch 9.0,
+            // product 3, so GPU_ID[31:16] & 0xFF0F is 0x9003 (0x9093 on the
+            // MT6789). Otherwise the GPU registers may not answer.
+            OperationRegion (GPHR, SystemMemory, 0x43F7F500, 0x60)
+            Field (GPHR, DWordAcc, NoLock, Preserve)
+            {
+                GMAG, 32, GVER, 32, GRES, 32, GSTP, 32,
+                Offset (0x3C), GGID, 32
+            }
+            Method (_STA, 0, NotSerialized)
+            {
+                If (LAnd (LEqual (GMAG, 0x47303754), LEqual (GRES, One)))
+                {
+                    If (LEqual (And (ShiftRight (GGID, 16), 0xFF0F), 0x9003)) { Return (0x0F) }
+                }
+                Return (Zero)
+            }
             Name (_CCA, Zero)
             Name (_CLS, Package () { 0x03, 0x02, 0x00 })
             Name (_CRS, ResourceTemplate ()
@@ -380,11 +471,8 @@ DefinitionBlock ("", "DSDT", 2, "TECLST", "T70PRO  ", 1)
             {
                 Return (LAnd (LEqual (MREV, 2), LEqual (MHPW, 2)))
             }
-            Method (_DEP, 0, NotSerialized)
-            {
-                If (MPGO ()) { Return (Package () {}) }
-                Return (Package () { \_SB.I2C6 })
-            }
+            // The controller and the onboard hub work without the Type-C chip.
+            // An I2C6 that is late or absent must not hold USB back.
             Name (TREG, Zero)
             OperationRegion (TCIO, GenericSerialBus, Zero, 0x100)
             Field (TCIO, BufferAcc, NoLock, Preserve)
@@ -416,8 +504,10 @@ DefinitionBlock ("", "DSDT", 2, "TECLST", "T70PRO  ", 1)
                 Store (TCRD (TPWR), Local2)
                 Store (TCRD (TVS0), Local3)
                 If (LGreater (Or (Or (Local0, Local1), Or (Local2, Local3)), 0xFF)) { Return (Zero) }
-                // Detection enabled, TCPC initialized, VBUS present, safe0V clear.
-                If (LOr (LNotEqual (And (Local2, 0x4C), 0x0C), And (Local3, 2))) { Return (Zero) }
+                // Report a valid VBUS-off state too. VBUS present and safe0V
+                // together are inconsistent and leave the sample unknown.
+                If (LOr (LNotEqual (And (Local2, 0x48), 0x08),
+                    LAnd (And (Local2, 4), And (Local3, 2)))) { Return (Zero) }
                 Return (Or (0x01000000, Or (ShiftLeft (Local0, 16),
                     Or (ShiftLeft (Local1, 8), Local2))))
             }
@@ -458,22 +548,28 @@ DefinitionBlock ("", "DSDT", 2, "TECLST", "T70PRO  ", 1)
                 Store (And (UDI3, 0x108), Local2)
                 If (LEqual (Arg0, 3))
                 {
-                    // Type-C alone, ID high and the hub mux and 5V off.
-                    Return (LAnd (LEqual (Local0, 0x400), LAnd (Local1, LNot (And (Local2, 8)))))
+                    // Type-C alone uses the TCPC, with the hub mux and 5V off.
+                    Return (LAnd (LNot (And (Local0, 0x10)), LAnd (Local1, LNot (And (Local2, 8)))))
                 }
-                // Either hub path keeps ID low, mux, 5V and reset released.
-                Store (0x400000, Local3)
-                If (LEqual (Arg0, 2)) { Store (Zero, Local3) }
-                Return (LAnd (LEqual (Local0, 0x10), LAnd (LEqual (Local2, 0x108),
-                    LEqual (Local1, Local3))))
+                If (LEqual (Arg0, 2))
+                {
+                    // Pogo docked behind the powered onboard hub works with or
+                    // without Type-C OTG boost (GPIO86) active simultaneously.
+                    Return (LAnd (LNot (And (Local0, 0x400)),
+                        LAnd (And (Local0, 0x10), LEqual (Local2, 0x108))))
+                }
+                // Type-C source keeps the same hub power and mux even when ID changes.
+                Return (LAnd (And (Local0, 0x10), LAnd (LEqual (Local2, 0x108),
+                    LEqual (Local1, 0x400000))))
             }
-            // The caller supplies the route accepted at first D0. Report
-            // only that route's live state, without touching any GPIO or TCPC.
+            // Return 0 for an inactive route, 1 for an active route and
+            // 2 if the GPIO observations disagree.
             Method (MROU, 1, Serialized)
             {
-                If (LOr (LGreater (Arg0, 3), LNot (MRGP (Arg0)))) { Return (Zero) }
-                If (MRGP (Arg0)) { Return (One) }
-                Return (Zero)
+                If (LGreater (Arg0, 3)) { Return (Zero) }
+                Store (MRGP (Arg0), Local0)
+                If (LNotEqual (MRGP (Arg0), Local0)) { Return (2) }
+                Return (And (Local0, One))
             }
 
             Method (MHRD, 0, Serialized)
@@ -515,9 +611,11 @@ DefinitionBlock ("", "DSDT", 2, "TECLST", "T70PRO  ", 1)
                 }
                 Return (Zero)
             }
+            // Firmware writes the record only for a running host. Its details are
+            // hints for the driver and must not hide the controller.
             Method (_STA, 0, NotSerialized)
             {
-                If (MHRD ()) { Return (0x0F) }
+                If (LAnd (LEqual (MRAD, One), LLessEqual (MREV, 2))) { Return (0x0F) }
                 Return (Zero)
             }
             Name (UCRS, ResourceTemplate ()
@@ -529,17 +627,7 @@ DefinitionBlock ("", "DSDT", 2, "TECLST", "T70PRO  ", 1)
                 Memory32Fixed (ReadWrite, 0x11F40000, 0x700)
                 Interrupt (ResourceConsumer, Level, ActiveHigh, Exclusive) { 160 }
             })
-            Name (UTCR, ResourceTemplate ()
-            {
-                // MtkUsb uses the same TCPC as the older MTCV method over I2C6.
-                I2cSerialBusV2 (0x4E, ControllerInitiated, 400000,
-                    AddressingMode7Bit, "\\_SB.I2C6", 0, ResourceConsumer, , Shared, )
-            })
-            Method (_CRS, 0, NotSerialized)
-            {
-                If (MPGO ()) { Return (UCRS) }
-                Return (ConcatenateResTemplate (UCRS, UTCR))
-            }
+            Method (_CRS, 0, NotSerialized) { Return (UCRS) }
         }
 
         Device (DISP)
@@ -581,19 +669,19 @@ DefinitionBlock ("", "DSDT", 2, "TECLST", "T70PRO  ", 1)
                 If (DRDY ()) { Return (0x0F) }
                 Return (Zero)
             }
-            Name (INFO, Buffer (0x30) {})
-            CreateDWordField (INFO, 0, RRDY)
-            CreateDWordField (INFO, 4, RREV)
-            CreateDWordField (INFO, 8, RBLO)
-            CreateDWordField (INFO, 12, RBHI)
-            CreateDWordField (INFO, 16, RSLO)
-            CreateDWordField (INFO, 20, RSHI)
-            CreateDWordField (INFO, 24, RWID)
-            CreateDWordField (INFO, 28, RHEI)
-            CreateDWordField (INFO, 32, RPIT)
-            CreateDWordField (INFO, 36, RFMT)
             Method (DFBI, 0, Serialized)
             {
+                Name (INFO, Buffer (0x30) {})
+                CreateDWordField (INFO, 0, RRDY)
+                CreateDWordField (INFO, 4, RREV)
+                CreateDWordField (INFO, 8, RBLO)
+                CreateDWordField (INFO, 12, RBHI)
+                CreateDWordField (INFO, 16, RSLO)
+                CreateDWordField (INFO, 20, RSHI)
+                CreateDWordField (INFO, 24, RWID)
+                CreateDWordField (INFO, 28, RHEI)
+                CreateDWordField (INFO, 32, RPIT)
+                CreateDWordField (INFO, 36, RFMT)
                 Store (DRDY (), RRDY)
                 Store (DREV, RREV)
                 Store (DBLO, RBLO) Store (DBHI, RBHI)
@@ -833,6 +921,53 @@ DefinitionBlock ("", "DSDT", 2, "TECLST", "T70PRO  ", 1)
             })
         }
 
+        // IFRAO_AUXADC gate 23 in the stock MT6789 clock binding.
+        PowerResource (AXCK, 0, 0)
+        {
+            OperationRegion (AXRG, SystemMemory, 0x10001088, 0x10)
+            Field (AXRG, DWordAcc, NoLock, WriteAsZeros)
+            { AXSE, 32, AXCL, 32, Offset (0x0C), AXST, 32 }
+
+            Method (_STA, 0, NotSerialized)
+            {
+                If (And (AXST, 0x0400)) { Return (Zero) }
+                Return (One)
+            }
+            Method (_ON, 0, Serialized) { Store (0x0400, AXCL) }
+            Method (_OFF, 0, Serialized) { Store (0x0400, AXSE) }
+        }
+
+        Device (NTC0)
+        {
+            Name (_HID, "HANA6794")
+            Name (_UID, Zero)
+            Name (_PR0, Package () { AXCK })
+
+            // clk-mt6789-bus.ko, ifrao_therm (clock 4), IFRAO bank 0 bit 10.
+            OperationRegion (TVRG, SystemMemory, 0x10001084, 0x10)
+            Field (TVRG, DWordAcc, NoLock, WriteAsZeros)
+            { TVCL, 32, Offset (0x0C), TVST, 32 }
+
+            Method (LVON, 0, Serialized)
+            {
+                Store (TVST, Local0)
+                If (LAnd (LNotEqual (Local0, 0xFFFFFFFF), And (Local0, 0x0400)))
+                {
+                    Store (0x0400, TVCL)
+                }
+            }
+            Name (_CRS, ResourceTemplate ()
+            {
+                Memory32Fixed (ReadWrite, 0x11001000, 0x1000)
+                Memory32Fixed (ReadOnly, 0x10001094, 4)
+                Memory32Fixed (ReadOnly, 0x11C10198, 4)
+                Memory32Fixed (ReadOnly, 0x1100B000, 0x1000)
+                Memory32Fixed (ReadOnly, 0x10001090, 4)
+                Memory32Fixed (ReadOnly, 0x11C101B4, 0x2C)
+                Memory32Fixed (ReadOnly, 0x11C102F8, 8)
+            })
+        }
+
         Device (HXT0)
         {
             Name (_HID, "HANA8313")
@@ -847,6 +982,34 @@ DefinitionBlock ("", "DSDT", 2, "TECLST", "T70PRO  ", 1)
                     { Return (One) }
                 }
                 Return (Zero)
+            }
+            // Read the same reset/IRQ pad state as the board handoff producer.
+            OperationRegion (HTGP, SystemMemory, 0x10005000, 0x434)
+            Field (HTGP, DWordAcc, NoLock, Preserve)
+            {
+                HITD, 32, Offset (0x40), HRTD, 32,
+                Offset (0x140), HRTL, 32,
+                Offset (0x310), HITM, 32, Offset (0x430), HRTM, 32
+            }
+            OperationRegion (HTII, SystemMemory, 0x11EA0080, 4)
+            Field (HTII, DWordAcc, NoLock, Preserve) { HITX, 32 }
+            OperationRegion (HTRI, SystemMemory, 0x11E200D0, 4)
+            Field (HTRI, DWordAcc, NoLock, Preserve) { HRTX, 32 }
+
+            // I2T0 owns the bus. The client independently reads the IC state
+            // over its Resource Hub connection before enabling touch input.
+            Method (HMRD, 1, Serialized)
+            {
+                If (LOr (LEqual (Arg0, Zero), LGreater (Arg0, 0xFFFFFF))) { Return (Zero) }
+                If (LNot (HMXR ())) { Return (Zero) }
+                // GPIO152 reset output, driven and sampled high.
+                If (LOr (And (HRTM, 0xF), LNot (And (HRTD, 0x01000000)))) { Return (Zero) }
+                If (LOr (LNot (And (HRTL, 0x01000000)), LNot (And (\_SB.IPIN, 0x01000000)))) { Return (Zero) }
+                If (LNot (And (HRTX, 0x00400000))) { Return (Zero) }
+                // GPIO9 interrupt input. Both asserted and idle levels are valid.
+                If (LOr (And (HITM, 0xF0), LOr (And (HITD, 0x0200), LNot (And (HITX, One)))))
+                { Return (Zero) }
+                Return (Or (ShiftLeft (Arg0, 8), One))
             }
             Method (_STA, 0, NotSerialized)
             {
@@ -911,22 +1074,33 @@ DefinitionBlock ("", "DSDT", 2, "TECLST", "T70PRO  ", 1)
                     If (LAnd (HREG, HLRD ())) { Notify (\_SB.LID0, 0x80) }
                 }
             }
+            // The wake-capable GPIO interrupt describes cover wake through _AEI.
+            Name (HAEI, ResourceTemplate ()
+            {
+                GpioInt (Edge, ActiveBoth, ExclusiveAndWake, PullDefault, 1000,
+                    "\\_SB.GPO0", 0, ResourceConsumer, , ) { 0 }
+            })
+            Name (PAEI, ResourceTemplate ()
+            {
+                GpioInt (Edge, ActiveLow, Exclusive, PullDefault, 0,
+                    "\\_SB.GPO0", 0, ResourceConsumer, , ) { 12 }
+            })
             Method (_AEI, 0, Serialized)
             {
                 If (HLRD ())
                 {
-                    Return (ResourceTemplate ()
-                    {
-                        GpioInt (Edge, ActiveBoth, ExclusiveAndWake, PullDefault, 1000,
-                            "\\_SB.GPO0", 0, ResourceConsumer, , ) { 0 }
-                    })
+                    If (\_SB.ACAD.PRDY ()) { Return (ConcatenateResTemplate (HAEI, PAEI)) }
+                    Return (HAEI)
                 }
+                If (\_SB.ACAD.PRDY ()) { Return (PAEI) }
                 Return (Buffer (2) { 0x79, 0x00 })
             }
             Method (_EVT, 1, Serialized)
             {
                 If (LAnd (LEqual (Arg0, Zero), LAnd (HREG, HLRD ())))
                 { Notify (\_SB.LID0, 0x80) }
+                If (LAnd (LEqual (Arg0, 12), LAnd (\_SB.ACAD.PREG, \_SB.ACAD.PRDY ())))
+                { Notify (\_SB.ACAD, 0x80) }
             }
             Name (_CRS, ResourceTemplate ()
             {
@@ -965,8 +1139,6 @@ DefinitionBlock ("", "DSDT", 2, "TECLST", "T70PRO  ", 1)
                 // Handler unavailable: do not invent a closed-cover event.
                 Return (One)
             }
-            // GPIO event index zero. S0 idle only; no S3/S4 wake claim.
-            Name (_PRW, Package () { Package () { \_SB.GPO0, Zero }, Zero })
         }
 
         Device (I2T0)
@@ -986,6 +1158,11 @@ DefinitionBlock ("", "DSDT", 2, "TECLST", "T70PRO  ", 1)
             {
                 If (LNot (IRDY ())) { Return (Zero) }
                 Return (\_SB.ILCK (Zero))
+            }
+            Method (IRRS, 0, Serialized)
+            {
+                If (LNot (IRDY ())) { Return (Zero) }
+                Return (\_SB.IRES (Zero))
             }
             Method (_STA, 0, NotSerialized)
             {
@@ -1018,6 +1195,11 @@ DefinitionBlock ("", "DSDT", 2, "TECLST", "T70PRO  ", 1)
                 If (LNot (IRDY ())) { Return (Zero) }
                 Return (\_SB.ILCK (One))
             }
+            Method (IRRS, 0, Serialized)
+            {
+                If (LNot (IRDY ())) { Return (Zero) }
+                Return (\_SB.IRES (One))
+            }
             Method (_STA, 0, NotSerialized)
             {
                 If (IRDY ()) { Return (0x0F) }
@@ -1031,103 +1213,406 @@ DefinitionBlock ("", "DSDT", 2, "TECLST", "T70PRO  ", 1)
             })
         }
 
+        // The battery is exposed by the Windows battery miniport. The
+        // ACPI node supplies PnP identity only; the gauge is accessed through
+        // the firmware PMIC PRM broker, not through direct MMIO in AML.
+        Device (BAT0)
+        {
+            Name (_HID, "HANA679B")
+            Name (_UID, Zero)
+            Name (_STR, Unicode ("T70 Pro Battery"))
+            Method (_STA, 0, NotSerialized) { Return (0x0F) }
+            Method (ACST, 0, NotSerialized) { Return (\_SB.ACAD.APST ()) }
+        }
+
+        Device (ACAD)
+        {
+            Name (_HID, "ACPI0003")
+            Name (_DEP, Package () { \_SB.I2C6, \_SB.GPO0 })
+            Name (PREG, Zero)
+            Method (PRDY, 0, NotSerialized)
+            {
+                If (LAnd (LEqual (PARD, One),
+                    LAnd (\_SB.I2C6.IRDY (), \_SB.GPO0.GRDY ()))) { Return (One) }
+                Return (Zero)
+            }
+            Method (_STA, 0, NotSerialized)
+            {
+                If (PRDY ()) { Return (0x0F) }
+                Return (Zero)
+            }
+            OperationRegion (SCIO, GenericSerialBus, Zero, 0x100)
+            Field (SCIO, BufferAcc, NoLock, Preserve)
+            {
+                Connection (I2cSerialBusV2 (0x6A, ControllerInitiated, 100000,
+                    AddressingMode7Bit, "\\_SB.I2C6", 0, ResourceConsumer, , Exclusive, )),
+                AccessAs (BufferAcc, AttribByte),
+                Offset (0x0B), ASTB, 8,
+                Offset (0x14), APID, 8
+            }
+            Method (_REG, 2, Serialized)
+            {
+                If (LEqual (Arg0, 0x09))
+                {
+                    Store (LEqual (Arg1, One), PREG)
+                    If (LAnd (PREG, PRDY ())) { Notify (ACAD, 0x80) }
+                }
+            }
+            Method (SBRD, 1, NotSerialized)
+            {
+                // AttribByte has one data byte. Byte 1 is reserved (ACPI 5.5.2.4.7.2).
+                If (LNotEqual (ObjectType (Arg0), 3)) { Return (0x100) }
+                If (LLess (SizeOf (Arg0), 3)) { Return (0x100) }
+                If (DerefOf (Index (Arg0, Zero))) { Return (0x100) }
+                Return (DerefOf (Index (Arg0, 2)))
+            }
+            Method (ISON, 1, NotSerialized)
+            {
+                // PG_STAT with an external input. VBUS_STAT 7 is OTG source.
+                If (LOr (LGreater (Arg0, 0xFF), LNot (And (Arg0, 4)))) { Return (Zero) }
+                Store (ShiftRight (Arg0, 5), Local0)
+                If (LAnd (LGreater (Local0, Zero), LLess (Local0, 7))) { Return (One) }
+                Return (Zero)
+            }
+            // Battery status needs to distinguish an offline adapter from a failed sample.
+            Method (APST, 0, Serialized)
+            {
+                If (LNot (LAnd (PREG, PRDY ()))) { Return (2) }
+                Store (SBRD (APID), Local0)
+                If (LGreater (Local0, 0xFF)) { Return (2) }
+                // Same part codes as StockPowerCore. Do not consume fault register 0x0C.
+                Store (And (ShiftRight (Local0, 3), 7), Local0)
+                If (LNot (And (ShiftRight (0x94, Local0), One))) { Return (2) }
+                Store (SBRD (ASTB), Local1)
+                If (LGreater (Local1, 0xFF)) { Return (2) }
+                Return (ISON (Local1))
+            }
+            Method (_PSR, 0, NotSerialized)
+            {
+                If (LEqual (APST (), One)) { Return (One) }
+                Return (Zero)
+            }
+        }
+
+        Device (I2T1)
+        {
+            Name (_HID, "HANA6789")
+            Name (_UID, 1)
+            Name (_CCA, Zero) // conservative noncoherent DMA buffers
+            Method (IRDY, 0, NotSerialized)
+            {
+                If (LAnd (LEqual (IREV, One), LAnd (And (IRAD, 4),
+                    LAnd (LGreaterEqual (ICL1, 1000000), LLessEqual (ICL1, 1000000000)))))
+                { Return (One) }
+                Return (Zero)
+            }
+            Method (ICLK, 0, NotSerialized) { Return (ICL1) }
+            Method (IRCK, 0, Serialized)
+            {
+                If (LNot (IRDY ())) { Return (Zero) }
+                Return (\_SB.ILCK (2))
+            }
+            Method (IRRS, 0, Serialized)
+            {
+                If (LNot (IRDY ())) { Return (Zero) }
+                Return (\_SB.IRES (2))
+            }
+            Method (_STA, 0, NotSerialized)
+            {
+                If (IRDY ()) { Return (0x0F) }
+                Return (Zero)
+            }
+            Name (_CRS, ResourceTemplate ()
+            {
+                Memory32Fixed (ReadWrite, 0x11E01000, 0x1000)
+                Memory32Fixed (ReadWrite, 0x10217100, 0x80)
+                Interrupt (ResourceConsumer, Level, ActiveHigh, Exclusive) { 177 }
+            })
+        }
+
+        // The stock domain windows use CSRAM. Table format is in USRAM
+        // (+0xBFC), and the scaling-mode word in CSRAM (+0x4CC).
+        Device (CPFM)
+        {
+            Name (_HID, "HANA6799")
+            Name (_UID, Zero)
+            Name (_STA, 0x0F)
+            Name (_CRS, ResourceTemplate ()
+            {
+                Memory32Fixed (ReadWrite, 0x0011BC10, 0x120)
+                Memory32Fixed (ReadWrite, 0x0011BD30, 0x120)
+                Memory32Fixed (ReadOnly, 0x00114FFC, 4)
+                Memory32Fixed (ReadOnly, 0x0011C0CC, 4)
+            })
+        }
+
         // MT6789 PSCI CPU_SUSPEND states from the stock DT /cpus/idle-states.
         // Core-off stops the local timer and loses core context (Arm DEN0048).
         // Include entry plus exit time because the DT has no wakeup-latency-us.
         // These are leaf states; cluster and system idle need a wake contract.
-        Name (LPNC, ResourceTemplate ()
-        {
-            Register (SystemMemory, 0, 0, 0, 0)
-        })
-        Name (LPWF, Package ()
-        {
-            One, One, One, Zero, Zero, Zero,
-            ResourceTemplate () { Register (FFixedHW, 32, 0, 0xFFFFFFFF, 3) },
-            LPNC, LPNC, "WFI"
-        })
-        Name (LPIE, Package ()
-        {
-            Zero, Zero, 2, LPWF,
-            Package ()
-            {
-                1600, 150, One, One, Zero, Zero,
-                ResourceTemplate () { Register (FFixedHW, 32, 0, 0x00010001, 3) },
-                LPNC, LPNC, "A55 core off"
-            }
-        })
-        Name (LPIP, Package ()
-        {
-            Zero, Zero, 2, LPWF,
-            Package ()
-            {
-                1400, 150, One, One, Zero, Zero,
-                ResourceTemplate () { Register (FFixedHW, 32, 0, 0x00010002, 3) },
-                LPNC, LPNC, "A76 core off"
-            }
-        })
-
         Device (CPU0)
         {
             Name (_HID, "ACPI0007")
+            Name (_DEP, Package () { \_SB.CPFM })
             Name (_UID, 0)
             Name (_STA, 0x0F)
-            Method (_LPI, 0, NotSerialized) { Return (\_SB.LPIE) }
+            Method (_LPI, 0, NotSerialized)
+            {
+                Return (Package ()
+                {
+                    Zero, Zero, 2,
+                    Package ()
+                    {
+                        One, One, One, Zero, Zero, Zero,
+                        ResourceTemplate () { Register (FFixedHW, 32, 0, 0xFFFFFFFF, 3) },
+                        ResourceTemplate () { Register (SystemMemory, 0, 0, 0, 0) },
+                        ResourceTemplate () { Register (SystemMemory, 0, 0, 0, 0) },
+                        "WFI"
+                    },
+                    Package ()
+                    {
+                        1600, 150, One, One, Zero, Zero,
+                        ResourceTemplate () { Register (FFixedHW, 32, 0, 0x00010001, 3) },
+                        ResourceTemplate () { Register (SystemMemory, 0, 0, 0, 0) },
+                        ResourceTemplate () { Register (SystemMemory, 0, 0, 0, 0) },
+                        "A55 core off"
+                    }
+                })
+            }
         }
-
         Device (CPU1)
         {
             Name (_HID, "ACPI0007")
+            Name (_DEP, Package () { \_SB.CPFM })
             Name (_UID, 1)
             Name (_STA, 0x0F)
-            Method (_LPI, 0, NotSerialized) { Return (\_SB.LPIE) }
+            Method (_LPI, 0, NotSerialized)
+            {
+                Return (Package ()
+                {
+                    Zero, Zero, 2,
+                    Package ()
+                    {
+                        One, One, One, Zero, Zero, Zero,
+                        ResourceTemplate () { Register (FFixedHW, 32, 0, 0xFFFFFFFF, 3) },
+                        ResourceTemplate () { Register (SystemMemory, 0, 0, 0, 0) },
+                        ResourceTemplate () { Register (SystemMemory, 0, 0, 0, 0) },
+                        "WFI"
+                    },
+                    Package ()
+                    {
+                        1600, 150, One, One, Zero, Zero,
+                        ResourceTemplate () { Register (FFixedHW, 32, 0, 0x00010001, 3) },
+                        ResourceTemplate () { Register (SystemMemory, 0, 0, 0, 0) },
+                        ResourceTemplate () { Register (SystemMemory, 0, 0, 0, 0) },
+                        "A55 core off"
+                    }
+                })
+            }
         }
-
         Device (CPU2)
         {
             Name (_HID, "ACPI0007")
+            Name (_DEP, Package () { \_SB.CPFM })
             Name (_UID, 2)
             Name (_STA, 0x0F)
-            Method (_LPI, 0, NotSerialized) { Return (\_SB.LPIE) }
+            Method (_LPI, 0, NotSerialized)
+            {
+                Return (Package ()
+                {
+                    Zero, Zero, 2,
+                    Package ()
+                    {
+                        One, One, One, Zero, Zero, Zero,
+                        ResourceTemplate () { Register (FFixedHW, 32, 0, 0xFFFFFFFF, 3) },
+                        ResourceTemplate () { Register (SystemMemory, 0, 0, 0, 0) },
+                        ResourceTemplate () { Register (SystemMemory, 0, 0, 0, 0) },
+                        "WFI"
+                    },
+                    Package ()
+                    {
+                        1600, 150, One, One, Zero, Zero,
+                        ResourceTemplate () { Register (FFixedHW, 32, 0, 0x00010001, 3) },
+                        ResourceTemplate () { Register (SystemMemory, 0, 0, 0, 0) },
+                        ResourceTemplate () { Register (SystemMemory, 0, 0, 0, 0) },
+                        "A55 core off"
+                    }
+                })
+            }
         }
-
         Device (CPU3)
         {
             Name (_HID, "ACPI0007")
+            Name (_DEP, Package () { \_SB.CPFM })
             Name (_UID, 3)
             Name (_STA, 0x0F)
-            Method (_LPI, 0, NotSerialized) { Return (\_SB.LPIE) }
+            Method (_LPI, 0, NotSerialized)
+            {
+                Return (Package ()
+                {
+                    Zero, Zero, 2,
+                    Package ()
+                    {
+                        One, One, One, Zero, Zero, Zero,
+                        ResourceTemplate () { Register (FFixedHW, 32, 0, 0xFFFFFFFF, 3) },
+                        ResourceTemplate () { Register (SystemMemory, 0, 0, 0, 0) },
+                        ResourceTemplate () { Register (SystemMemory, 0, 0, 0, 0) },
+                        "WFI"
+                    },
+                    Package ()
+                    {
+                        1600, 150, One, One, Zero, Zero,
+                        ResourceTemplate () { Register (FFixedHW, 32, 0, 0x00010001, 3) },
+                        ResourceTemplate () { Register (SystemMemory, 0, 0, 0, 0) },
+                        ResourceTemplate () { Register (SystemMemory, 0, 0, 0, 0) },
+                        "A55 core off"
+                    }
+                })
+            }
         }
-
         Device (CPU4)
         {
             Name (_HID, "ACPI0007")
+            Name (_DEP, Package () { \_SB.CPFM })
             Name (_UID, 4)
             Name (_STA, 0x0F)
-            Method (_LPI, 0, NotSerialized) { Return (\_SB.LPIE) }
+            Method (_LPI, 0, NotSerialized)
+            {
+                Return (Package ()
+                {
+                    Zero, Zero, 2,
+                    Package ()
+                    {
+                        One, One, One, Zero, Zero, Zero,
+                        ResourceTemplate () { Register (FFixedHW, 32, 0, 0xFFFFFFFF, 3) },
+                        ResourceTemplate () { Register (SystemMemory, 0, 0, 0, 0) },
+                        ResourceTemplate () { Register (SystemMemory, 0, 0, 0, 0) },
+                        "WFI"
+                    },
+                    Package ()
+                    {
+                        1600, 150, One, One, Zero, Zero,
+                        ResourceTemplate () { Register (FFixedHW, 32, 0, 0x00010001, 3) },
+                        ResourceTemplate () { Register (SystemMemory, 0, 0, 0, 0) },
+                        ResourceTemplate () { Register (SystemMemory, 0, 0, 0, 0) },
+                        "A55 core off"
+                    }
+                })
+            }
         }
-
         Device (CPU5)
         {
             Name (_HID, "ACPI0007")
+            Name (_DEP, Package () { \_SB.CPFM })
             Name (_UID, 5)
             Name (_STA, 0x0F)
-            Method (_LPI, 0, NotSerialized) { Return (\_SB.LPIE) }
+            Method (_LPI, 0, NotSerialized)
+            {
+                Return (Package ()
+                {
+                    Zero, Zero, 2,
+                    Package ()
+                    {
+                        One, One, One, Zero, Zero, Zero,
+                        ResourceTemplate () { Register (FFixedHW, 32, 0, 0xFFFFFFFF, 3) },
+                        ResourceTemplate () { Register (SystemMemory, 0, 0, 0, 0) },
+                        ResourceTemplate () { Register (SystemMemory, 0, 0, 0, 0) },
+                        "WFI"
+                    },
+                    Package ()
+                    {
+                        1600, 150, One, One, Zero, Zero,
+                        ResourceTemplate () { Register (FFixedHW, 32, 0, 0x00010001, 3) },
+                        ResourceTemplate () { Register (SystemMemory, 0, 0, 0, 0) },
+                        ResourceTemplate () { Register (SystemMemory, 0, 0, 0, 0) },
+                        "A55 core off"
+                    }
+                })
+            }
         }
-
         Device (CPU6)
         {
             Name (_HID, "ACPI0007")
+            Name (_DEP, Package () { \_SB.CPFM })
             Name (_UID, 6)
             Name (_STA, 0x0F)
-            Method (_LPI, 0, NotSerialized) { Return (\_SB.LPIP) }
+            Method (_LPI, 0, NotSerialized)
+            {
+                Return (Package ()
+                {
+                    Zero, Zero, 2,
+                    Package ()
+                    {
+                        One, One, One, Zero, Zero, Zero,
+                        ResourceTemplate () { Register (FFixedHW, 32, 0, 0xFFFFFFFF, 3) },
+                        ResourceTemplate () { Register (SystemMemory, 0, 0, 0, 0) },
+                        ResourceTemplate () { Register (SystemMemory, 0, 0, 0, 0) },
+                        "WFI"
+                    },
+                    Package ()
+                    {
+                        1400, 150, One, One, Zero, Zero,
+                        ResourceTemplate () { Register (FFixedHW, 32, 0, 0x00010002, 3) },
+                        ResourceTemplate () { Register (SystemMemory, 0, 0, 0, 0) },
+                        ResourceTemplate () { Register (SystemMemory, 0, 0, 0, 0) },
+                        "A76 core off"
+                    }
+                })
+            }
         }
-
         Device (CPU7)
         {
             Name (_HID, "ACPI0007")
+            Name (_DEP, Package () { \_SB.CPFM })
             Name (_UID, 7)
             Name (_STA, 0x0F)
-            Method (_LPI, 0, NotSerialized) { Return (\_SB.LPIP) }
+            Method (_LPI, 0, NotSerialized)
+            {
+                Return (Package ()
+                {
+                    Zero, Zero, 2,
+                    Package ()
+                    {
+                        One, One, One, Zero, Zero, Zero,
+                        ResourceTemplate () { Register (FFixedHW, 32, 0, 0xFFFFFFFF, 3) },
+                        ResourceTemplate () { Register (SystemMemory, 0, 0, 0, 0) },
+                        ResourceTemplate () { Register (SystemMemory, 0, 0, 0, 0) },
+                        "WFI"
+                    },
+                    Package ()
+                    {
+                        1400, 150, One, One, Zero, Zero,
+                        ResourceTemplate () { Register (FFixedHW, 32, 0, 0x00010002, 3) },
+                        ResourceTemplate () { Register (SystemMemory, 0, 0, 0, 0) },
+                        ResourceTemplate () { Register (SystemMemory, 0, 0, 0, 0) },
+                        "A76 core off"
+                    }
+                })
+            }
+        }
+    }
+
+    Scope (\_TZ)
+    {
+        ThermalZone (SOC0)
+        {
+            // Stock /thermal-zones/soc_max critical trip: 113500 mC.
+            Name (_CRT, 3867)
+            Name (_DEP, Package () { \_SB.NTC0 })
+
+            // Microsoft thermal extension: the same IOCTL reads the
+            // hottest of the 13 retained LVTS sites in MtkThermal.
+            Method (_DSM, 4, NotSerialized)
+            {
+                If (LAnd (LEqual (ObjectType (Arg0), 3),
+                    LAnd (LEqual (Arg0, ToUUID ("14d399cd-7a27-4b18-8fb4-7cb7b9f4e500")),
+                    LEqual (Arg1, Zero))))
+                {
+                    If (LEqual (Arg2, Zero)) { Return (Buffer () { 0x05 }) }
+                    If (LEqual (Arg2, 2)) { Return ("\\_SB.NTC0") }
+                }
+                Return (Buffer () { Zero })
+            }
         }
     }
 }
